@@ -5,128 +5,143 @@ export interface CoordsXY {
   y: number;
 }
 
-const classifiers = [
-  // "haarcascade_eye.xml"
-  "gcp-square-base.xml",
-  "gcp-bw-quads.xml",
-];
-
-let areClassifiersLoaded = false;
-
-async function loadClassifiers() {
-  console.log("Starting classifier loading process...");
-
-  for (const classifierName of classifiers) {
-    try {
-      console.log(`Fetching classifier: ${classifierName}`);
-      const response = await fetch(`/classifiers/${classifierName}`);
-      console.log(`Received response for ${classifierName}:`, response.status);
-
-      const buffer = await response.arrayBuffer();
-      const data = new Uint8Array(buffer);
-
-      console.log(
-        `Loading classifier data for ${classifierName} into OpenCV...`
-      );
-      cv.FS_createDataFile("/", classifierName, data, true, false, false);
-      console.log(`Classifier ${classifierName} loaded successfully`);
-    } catch (error) {
-      console.error(`Error loading classifier ${classifierName}:`, error);
-      throw error;
-    }
-  }
-
-  areClassifiersLoaded = true;
-  console.log("All classifiers loaded successfully");
+/**
+ * Calculates Euclidean distance between two points.
+ */
+function euclideanDistance(pt1: CoordsXY, pt2: CoordsXY): number {
+  return Math.sqrt(Math.pow(pt1.x - pt2.x, 2) + Math.pow(pt1.y - pt2.y, 2));
 }
 
-export async function detectGCP(
-  imageElement: HTMLImageElement
-): Promise<CoordsXY | null> {
-  console.log("Starting GCP detection process...");
+/**
+ * Computes the centroid of a contour.
+ */
+function getCentroid(contour: any): CoordsXY | null {
+  const moments = cv.moments(contour);
+  if (moments.m00 === 0) return null;
+  return {
+    x: Math.round(moments.m10 / moments.m00),
+    y: Math.round(moments.m01 / moments.m00),
+  };
+}
 
-  if (!areClassifiersLoaded) {
-    console.log("Loading classifiers for the first time...");
-    await loadClassifiers();
+/**
+ * Detects GCPs in an image using white and black region detection.
+ */
+export function detectGCP(imageElement: HTMLImageElement): CoordsXY[] | null {
+  console.log('Starting GCP detection');
+  let img = cv.imread(imageElement);
+
+  // Convert to HSV
+  let hsv = new cv.Mat();
+  cv.cvtColor(img, hsv, cv.COLOR_RGB2HSV);
+
+  // Define color thresholds
+  let lowerWhite = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 0, 170, 0]);
+  let upperWhite = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [180, 100, 255, 255]);
+  let lowerBlack = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 0, 0, 0]);
+  let upperBlack = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [180, 255, 130, 255]);
+
+  // Create masks
+  let whiteMask = new cv.Mat();
+  let blackMask = new cv.Mat();
+  cv.inRange(hsv, lowerWhite, upperWhite, whiteMask);
+  cv.inRange(hsv, lowerBlack, upperBlack, blackMask);
+
+  // Find white contours
+  let contours = new cv.MatVector();
+  let hierarchy = new cv.Mat();
+  cv.findContours(whiteMask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+  let minArea = 100;
+  let whiteContours: any[] = [];
+  let whiteCentroids: CoordsXY[] = [];
+
+  for (let i = 0; i < contours.size(); i++) {
+    let cnt = contours.get(i);
+    let area = cv.contourArea(cnt);
+    if (area > minArea) {
+      let centroid = getCentroid(cnt);
+      if (centroid) {
+        whiteContours.push(cnt);
+        whiteCentroids.push(centroid);
+      }
+    }
   }
 
-  try {
-    console.log("Reading image into OpenCV format...");
-    const img = cv.imread(imageElement);
-    console.log("Image loaded with dimensions:", img.size());
+  // Find potential GCP pairs
+  let potentialGcpPairs: any[] = [];
+  for (let i = 0; i < whiteContours.length; i++) {
+    for (let j = i + 1; j < whiteContours.length; j++) {
+      let c1 = whiteCentroids[i];
+      let c2 = whiteCentroids[j];
 
-    const scale = 1.05;
-    const neighbors = 3;
-    const minSize = new cv.Size(30, 30);
-    const maxSize = new cv.Size(0, 0);
+      if (Math.abs(cv.contourArea(whiteContours[i]) - cv.contourArea(whiteContours[j])) > 500) continue;
 
-    console.log("Detection parameters:", {
-      scale,
-      neighbors,
-      minSize,
-      maxSize,
-    });
-
-    let result = null;
-
-    for (const classifierName of classifiers) {
-      console.log(`Attempting detection with classifier: ${classifierName}`);
-      const classifier = new cv.CascadeClassifier();
-      const rects = new cv.RectVector();
-
-      classifier.load(`/${classifierName}`);
-
-      console.log(`Is classifier empty? ${classifier.empty()}`);
-      if (classifier.empty()) {
-        throw new Error(`Failed to load classifier: ${classifierName}`);
+      let dx = Math.abs(c1.x - c2.x);
+      let dy = Math.abs(c1.y - c2.y);
+      if (0.3 < dy / (dx + 1e-6) && dy / (dx + 1e-6) < 3 && euclideanDistance(c1, c2) < 60) {
+        potentialGcpPairs.push([whiteContours[i], whiteContours[j]]);
       }
-      // const gray = new cv.Mat();
-      // cv.cvtColor(img, gray, cv.COLOR_RGBA2GRAY, 0);
-      // cv.equalizeHist(gray, gray); // Enhance contrast
+    }
+  }
 
-      // console.log("Running detectMultiScale...");
-      const scale = 1.1; // Reduce from 1.05
-      const neighbors = 5; // Increase for stricter detection
-      // const minSize = new cv.Size(50, 50); // Avoid too-small detections
-      // const maxSize = new cv.Size(300, 300); // Prevent massive regions
+  // Check for black areas around detected GCPs
+  let finalGcpPairs: any[] = [];
+  for (let [cnt1, cnt2] of potentialGcpPairs) {
+    let mask = new cv.Mat.zeros(whiteMask.rows, whiteMask.cols, cv.CV_8UC1);
+    
+    // Draw contours
+    let pairVector = new cv.MatVector();
+    pairVector.push_back(cnt1);
+    pairVector.push_back(cnt2);
+    cv.drawContours(mask, pairVector, -1, new cv.Scalar(255), 5);
 
-      classifier.detectMultiScale(
-        img,
-        rects,
-        scale,
-        neighbors,
-        0,
-        minSize,
-        maxSize
-      );
-      console.log(`Found ${rects.size()} potential GCP matches`);
+    // Perform bitwise AND operation (EXACTLY like Python)
+    let blackMaskROI = new cv.Mat();
+    cv.bitwise_and(mask, blackMask, blackMaskROI);
+    let blackCount = cv.countNonZero(blackMaskROI);
 
-      if (rects.size() > 0) {
-        const rect = rects.get(0);
-        result = {
-          x: rect.x + rect.width / 2,
-          y: rect.y + rect.height / 2,
-        };
-
-        console.log("GCP detected at:", result);
-        console.log("Rectangle dimensions:", rect);
-        rects.delete();
-        classifier.delete();
-        break;
-      }
-
-      console.log("No GCP found with this classifier, trying next...");
-      rects.delete();
-      classifier.delete();
+    if (blackCount > 5) {  // Strict black check (same as Python)
+      finalGcpPairs.push([cnt1, cnt2]);
     }
 
-    img.delete();
-    console.log(
-      result ? "Detection completed successfully" : "No GCP detected in image"
-    );
-    return result;
-  } catch (error) {
-    console.error("Error in GCP detection:", error);
-    return null;
+    // Cleanup
+    pairVector.delete();
+    mask.delete();
+    blackMaskROI.delete();
   }
+
+  // Collect final results
+  let results: CoordsXY[] = [];
+  if (finalGcpPairs.length === 0) {
+    console.log('No pairs found, using individual contours');
+    results = whiteCentroids;
+  } else {
+    console.log('Processing GCP pairs');
+    for (let [cnt1, cnt2] of finalGcpPairs) {
+      let c1 = getCentroid(cnt1);
+      let c2 = getCentroid(cnt2);
+      if (c1 && c2) {
+        results.push({
+          x: Math.round((c1.x + c2.x) / 2),
+          y: Math.round((c1.y + c2.y) / 2),
+        });
+      }
+    }
+  }
+
+  // Cleanup
+  img.delete();
+  hsv.delete();
+  whiteMask.delete();
+  blackMask.delete();
+  contours.delete();
+  hierarchy.delete();
+  lowerWhite.delete();
+  upperWhite.delete();
+  lowerBlack.delete();
+  upperBlack.delete();
+
+  console.log('Detection complete, found', results.length, 'points');
+  return results.length > 0 ? results : null;
 }

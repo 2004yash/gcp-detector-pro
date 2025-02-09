@@ -7,7 +7,7 @@ export default function Home() {
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [detectedPoint, setDetectedPoint] = useState<CoordsXY | null>(null);
+  const [detectedPoint, setDetectedPoint] = useState<CoordsXY[]>([]);
   const [cvReady, setCvReady] = useState(false);
   const [originalImageSize, setOriginalImageSize] = useState<{ width: number; height: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,11 +104,13 @@ export default function Home() {
         };
       });
 
-      const point = await detectGCP(img);
-      setDetectedPoint(point);
+      const points = await detectGCP(img);
+      if (points) {
+        setDetectedPoint(points);
+      }
 
-      if (!point) {
-        setError('No GCP marker detected in the image. Please try with a different image.');
+      if (!points || points.length === 0) {
+        setError('No GCP markers detected in the image. Please try with a different image.');
       }
     } catch (error) {
       console.error('Error detecting GCP:', error);
@@ -172,18 +174,22 @@ export default function Home() {
               />
             </div>
 
-            {detectedPoint && (
+            {detectedPoint.length > 0 && (
               <div className="p-4 border rounded-lg bg-gray-50">
                 <h3 className="font-bold mb-2">Detected Coordinates</h3>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <span className="text-gray-600">Original X:</span>
-                    <span className="ml-2 font-mono">{detectedPoint.x.toFixed(2)}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">Original Y:</span>
-                    <span className="ml-2 font-mono">{detectedPoint.y.toFixed(2)}</span>
-                  </div>
+                <div className="max-h-40 overflow-y-auto">
+                  {detectedPoint.map((point, index) => (
+                    <div key={index} className="grid grid-cols-2 gap-2 mb-2">
+                      <div>
+                        <span className="text-gray-600">Point {index + 1} X:</span>
+                        <span className="ml-2 font-mono">{point.x.toFixed(2)}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Y:</span>
+                        <span className="ml-2 font-mono">{point.y.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -219,14 +225,14 @@ export default function Home() {
                     });
                   }}
                 />
-                {detectedPoint && (
-                  <>
+                {detectedPoint.length > 0 && detectedPoint.map((point, index) => (
+                  <div key={index}>
                     <div
                       className="absolute w-6 h-6 border-2 border-red-500 rounded-full transform -translate-x-1/2 -translate-y-1/2 animate-pulse"
                       style={{
-                        left: `${scaleCoordinates(detectedPoint).x}px`,
-                        top: `${scaleCoordinates(detectedPoint).y}px`,
-                        pointerEvents: 'none' // Prevent marker from interfering with interactions
+                        left: `${scaleCoordinates(point).x}px`,
+                        top: `${scaleCoordinates(point).y}px`,
+                        pointerEvents: 'none'
                       }}
                     >
                       <div className="absolute inset-0 m-auto w-2 h-2 bg-red-500 rounded-full" />
@@ -234,16 +240,15 @@ export default function Home() {
                     <div
                       className="absolute px-2 py-1 bg-black/75 text-white text-xs rounded"
                       style={{
-                        left: `${scaleCoordinates(detectedPoint).x + 15}px`,
-                        top: `${scaleCoordinates(detectedPoint).y + 15}px`,
+                        left: `${scaleCoordinates(point).x + 15}px`,
+                        top: `${scaleCoordinates(point).y + 15}px`,
                         pointerEvents: 'none',
-                        transform: 'translate(0, 0)' // Remove default transform
                       }}
                     >
-                      ({detectedPoint.x.toFixed(1)}, {detectedPoint.y.toFixed(1)})
+                      {index + 1}: ({point.x.toFixed(1)}, {point.y.toFixed(1)})
                     </div>
-                  </>
-                )}
+                  </div>
+                ))}
               </>
             ) : (
               <div className="flex items-center justify-center h-64 text-gray-400">
