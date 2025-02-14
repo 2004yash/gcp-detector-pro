@@ -144,18 +144,20 @@ export default function Home() {
     }
   };
 
-  // Add this new function to calculate container style
   const getImageContainerStyle = () => {
     if (!originalImageSize) return {};
     
-    const aspectRatio = originalImageSize.width / originalImageSize.height;
+    // Set container to exact image dimensions, but with max constraints
+    const maxWidth = Math.min(800, originalImageSize.width);
+    const scale = maxWidth / originalImageSize.width;
+    const width = maxWidth;
+    const height = originalImageSize.height * scale;
     
     return {
       position: 'relative' as const,
-      width: '100%',
-      paddingTop: `${(1 / aspectRatio) * 100}%`, // maintains aspect ratio
-      maxHeight: '80vh',
-      overflow: 'hidden'
+      width: `${width}px`,
+      height: `${height}px`,
+      margin: '0 auto',
     };
   };
 
@@ -201,14 +203,14 @@ export default function Home() {
         {/* Main Content */}
         <div className="space-y-6">
           {/* Image Viewer Section */}
-          <div className="relative bg-gray-800 rounded-lg overflow-hidden border border-gray-700">
+          <div className="relative bg-gray-800 rounded-lg overflow-hidden border border-gray-700 mx-auto" style={{ maxWidth: '800px' }}>
             {preview ? (
               <div style={getImageContainerStyle()}>
                 <img
                   ref={imageRef}
                   src={preview}
                   alt="Preview"
-                  className="absolute top-0 left-0 w-full h-full object-contain"
+                  className="w-full h-full object-contain"
                   onLoad={(e) => {
                     const img = e.currentTarget;
                     const newSize = {
@@ -216,9 +218,10 @@ export default function Home() {
                       height: img.naturalHeight
                     };
                     setOriginalImageSize(newSize);
-                    // Set displayed size immediately after load
-                    setDisplayedImageSize(newSize);
-                    updateDisplayedImageSize();
+                    setDisplayedImageSize({
+                      width: Math.min(800, img.naturalWidth),
+                      height: Math.min(800 * (img.naturalHeight / img.naturalWidth), img.naturalHeight)
+                    });
                   }}
                 />
                 {detectedPoint.length > 0 && detectedPoint.map((point, index) => {
@@ -255,7 +258,7 @@ export default function Home() {
                 })}
               </div>
             ) : (
-              <div className="flex items-center justify-center h-full text-gray-500">
+              <div className="w-full h-[400px] flex items-center justify-center text-gray-500">
                 <div className="text-center">
                   <svg className="w-16 h-16 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
