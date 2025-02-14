@@ -24,22 +24,72 @@ function getCentroid(contour: any): CoordsXY | null {
   };
 }
 
+export interface GCPDetectorConfig {
+  // White detection range
+  whiteThreshold: {
+    min: [number, number, number],  // HSV minimum values
+    max: [number, number, number]   // HSV maximum values
+  },
+  // Black detection range
+  blackThreshold: {
+    min: [number, number, number],
+    max: [number, number, number]
+  },
+  // Minimum area for a marker to be considered
+  minMarkerArea: number,
+  // Maximum allowed difference in area between paired markers
+  maxAreaDifference: number,
+  // Distance criteria for pairing markers
+  pairCriteria: {
+    minRatio: number,    // Minimum height/width ratio
+    maxRatio: number,    // Maximum height/width ratio
+    maxDistance: number  // Maximum distance between paired markers
+  },
+  // Minimum black pixels for verification
+  minBlackPixels: number
+}
+
+export const defaultConfig: GCPDetectorConfig = {
+  whiteThreshold: {
+    min: [0, 0, 170],
+    max: [180, 100, 255]
+  },
+  blackThreshold: {
+    min: [0, 0, 0],
+    max: [180, 255, 130]
+  },
+  minMarkerArea: 100,
+  maxAreaDifference: 500,
+  pairCriteria: {
+    minRatio: 0.3,
+    maxRatio: 3,
+    maxDistance: 60
+  },
+  minBlackPixels: 5
+};
+
 /**
  * Detects GCPs in an image using white and black region detection.
  */
-export function detectGCP(imageElement: HTMLImageElement): CoordsXY[] | null {
+export function detectGCP(
+  imageElement: HTMLImageElement, 
+  config: Partial<GCPDetectorConfig> = {}
+): CoordsXY[] | null {
   console.log('Starting GCP detection');
   let img = cv.imread(imageElement);
+
+  // Merge provided config with defaults
+  const finalConfig = { ...defaultConfig, ...config };
 
   // Convert to HSV
   let hsv = new cv.Mat();
   cv.cvtColor(img, hsv, cv.COLOR_RGB2HSV);
 
   // Define color thresholds
-  let lowerWhite = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 0, 170, 0]);
-  let upperWhite = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [180, 100, 255, 255]);
-  let lowerBlack = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 0, 0, 0]);
-  let upperBlack = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [180, 255, 130, 255]);
+  let lowerWhite = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [...finalConfig.whiteThreshold.min, 0]);
+  let upperWhite = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [...finalConfig.whiteThreshold.max, 255]);
+  let lowerBlack = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [...finalConfig.blackThreshold.min, 0]);
+  let upperBlack = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [...finalConfig.blackThreshold.max, 255]);
 
   // Create masks
   let whiteMask = new cv.Mat();
@@ -52,7 +102,7 @@ export function detectGCP(imageElement: HTMLImageElement): CoordsXY[] | null {
   let hierarchy = new cv.Mat();
   cv.findContours(whiteMask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-  let minArea = 100;
+  let minArea = finalConfig.minMarkerArea;
   let whiteContours: any[] = [];
   let whiteCentroids: CoordsXY[] = [];
 
@@ -75,11 +125,13 @@ export function detectGCP(imageElement: HTMLImageElement): CoordsXY[] | null {
       let c1 = whiteCentroids[i];
       let c2 = whiteCentroids[j];
 
-      if (Math.abs(cv.contourArea(whiteContours[i]) - cv.contourArea(whiteContours[j])) > 500) continue;
+      if (Math.abs(cv.contourArea(whiteContours[i]) - cv.contourArea(whiteContours[j])) > finalConfig.maxAreaDifference) continue;
 
       let dx = Math.abs(c1.x - c2.x);
       let dy = Math.abs(c1.y - c2.y);
-      if (0.3 < dy / (dx + 1e-6) && dy / (dx + 1e-6) < 3 && euclideanDistance(c1, c2) < 60) {
+      if (finalConfig.pairCriteria.minRatio < dy / (dx + 1e-6) && 
+          dy / (dx + 1e-6) < finalConfig.pairCriteria.maxRatio && 
+          euclideanDistance(c1, c2) < finalConfig.pairCriteria.maxDistance) {
         potentialGcpPairs.push([whiteContours[i], whiteContours[j]]);
       }
     }
@@ -101,7 +153,7 @@ export function detectGCP(imageElement: HTMLImageElement): CoordsXY[] | null {
     cv.bitwise_and(mask, blackMask, blackMaskROI);
     let blackCount = cv.countNonZero(blackMaskROI);
 
-    if (blackCount > 5) {  // Strict black check (same as Python)
+    if (blackCount > finalConfig.minBlackPixels) {  // Strict black check (same as Python)
       finalGcpPairs.push([cnt1, cnt2]);
     }
 

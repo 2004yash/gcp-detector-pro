@@ -1,7 +1,22 @@
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
-import { detectGCP, CoordsXY } from './utils/gcp_detector';
+import { detectGCP, CoordsXY, GCPDetectorConfig, defaultConfig } from './utils/gcp_detector';
+
+interface TooltipProps {
+  content: string;
+}
+
+const InfoTooltip: React.FC<TooltipProps> = ({ content }) => (
+  <div className="group relative inline-block ml-2">
+    <svg className="w-4 h-4 text-gray-500" fill="currentColor" viewBox="0 0 20 20">
+      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a 1 1 0 100-2v-3a 1 1 0 00-1-1H9z" clipRule="evenodd" />
+    </svg>
+    <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 hidden group-hover:block w-48 p-2 bg-black text-white text-xs rounded shadow-lg z-50">
+      {content}
+    </div>
+  </div>
+);
 
 export default function Home() {
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
@@ -11,7 +26,22 @@ export default function Home() {
   const [cvReady, setCvReady] = useState(false);
   const [originalImageSize, setOriginalImageSize] = useState<{ width: number; height: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [config, setConfig] = useState<GCPDetectorConfig>(defaultConfig);
   const imageRef = useRef<HTMLImageElement>(null);
+  const [displayedImageSize, setDisplayedImageSize] = useState<{ width: number; height: number } | null>(null);
+
+  const tooltips = {
+    whiteThreshold: "Adjusts how bright a white marker needs to be to be detected. Higher values mean stricter white detection.",
+    blackThreshold: "Controls how dark surrounding areas need to be. Lower values mean stricter black detection.",
+    minMarkerArea: "The minimum size a marker needs to be for detection. Increase for clearer images, decrease for distant markers.",
+    maxAreaDifference: "How different two markers can be in size and still be considered a pair.",
+    pairDistance: "Maximum distance between two markers to be considered a pair. Adjust based on marker spacing in your images.",
+    blackPixels: "How many dark pixels need to be around markers for verification. Higher values mean stricter checking."
+  };
+
+  const resetConfig = () => {
+    setConfig(defaultConfig);
+  };
 
   useEffect(() => {
     const script = document.createElement('script');
@@ -52,42 +82,36 @@ export default function Home() {
   };
 
   const scaleCoordinates = (point: CoordsXY): CoordsXY => {
-    if (!originalImageSize || !imageRef.current) return point;
+    if (!originalImageSize || !displayedImageSize) return point;
     
-    // Get the display dimensions
-    const displayWidth = imageRef.current.clientWidth;
-    const displayHeight = imageRef.current.clientHeight;
-    
-    // Calculate aspect ratios
-    const imageAspectRatio = originalImageSize.width / originalImageSize.height;
-    const containerAspectRatio = displayWidth / displayHeight;
-    
-    let scale = { x: 1, y: 1 };
-    
-    // Determine scaling based on aspect ratio
-    if (imageAspectRatio > containerAspectRatio) {
-      // Image is wider than container
-      scale.x = displayWidth / originalImageSize.width;
-      scale.y = scale.x; // Maintain aspect ratio
-    } else {
-      // Image is taller than container
-      scale.y = displayHeight / originalImageSize.height;
-      scale.x = scale.y; // Maintain aspect ratio
-    }
-    
-    // Calculate the actual dimensions after scaling
-    const scaledWidth = originalImageSize.width * scale.x;
-    const scaledHeight = originalImageSize.height * scale.y;
-    
-    // Calculate offsets to center the image
-    const offsetX = (displayWidth - scaledWidth) / 2;
-    const offsetY = (displayHeight - scaledHeight) / 2;
+    // Calculate scale factors based on actual displayed image size
+    const scaleX = displayedImageSize.width / originalImageSize.width;
+    const scaleY = displayedImageSize.height / originalImageSize.height;
     
     return {
-      x: (point.x * scale.x) + offsetX,
-      y: (point.y * scale.y) + offsetY
+      x: point.x * scaleX,
+      y: point.y * scaleY
     };
   };
+
+  const updateDisplayedImageSize = () => {
+    if (imageRef.current) {
+      const rect = imageRef.current.getBoundingClientRect();
+      setDisplayedImageSize({
+        width: rect.width,
+        height: rect.height
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (!imageRef.current) return;
+    
+    const observer = new ResizeObserver(updateDisplayedImageSize);
+    observer.observe(imageRef.current);
+    
+    return () => observer.disconnect();
+  }, []);
 
   const handleDetectGCP = async () => {
     if (!selectedImage || !cvReady) return;
@@ -104,7 +128,7 @@ export default function Home() {
         };
       });
 
-      const points = await detectGCP(img);
+      const points = await detectGCP(img, config);
       if (points) {
         setDetectedPoint(points);
       }
@@ -120,14 +144,29 @@ export default function Home() {
     }
   };
 
+  // Add this new function to calculate container style
+  const getImageContainerStyle = () => {
+    if (!originalImageSize) return {};
+    
+    const aspectRatio = originalImageSize.width / originalImageSize.height;
+    
+    return {
+      position: 'relative' as const,
+      width: '100%',
+      paddingTop: `${(1 / aspectRatio) * 100}%`, // maintains aspect ratio
+      maxHeight: '80vh',
+      overflow: 'hidden'
+    };
+  };
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-6 bg-gray-100">
-      <div className="w-full max-w-4xl p-6 bg-white rounded-lg shadow-md">
-        <h1 className="text-4xl font-bold mb-6 text-center">GCP Detector</h1>
+    <main className="min-h-screen bg-gray-900 text-gray-100">
+      <div className="container mx-auto px-4 py-8">
+        <h1 className="text-4xl font-bold mb-8 text-center text-blue-400">GCP Detector</h1>
 
         {/* Error Alert */}
         {error && (
-          <div className="mb-6 p-4 border-l-4 border-red-500 bg-red-50 rounded">
+          <div className="mb-6 p-4 border-l-4 border-red-500 bg-gray-800 rounded">
             <div className="flex">
               <div className="flex-shrink-0">
                 <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
@@ -159,103 +198,237 @@ export default function Home() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="space-y-4">
-            <div className="p-4 border rounded-lg">
-              <label className="block text-gray-700 text-sm font-bold mb-2">
+        {/* Main Content */}
+        <div className="space-y-6">
+          {/* Image Viewer Section */}
+          <div className="relative bg-gray-800 rounded-lg overflow-hidden border border-gray-700">
+            {preview ? (
+              <div style={getImageContainerStyle()}>
+                <img
+                  ref={imageRef}
+                  src={preview}
+                  alt="Preview"
+                  className="absolute top-0 left-0 w-full h-full object-contain"
+                  onLoad={(e) => {
+                    const img = e.currentTarget;
+                    const newSize = {
+                      width: img.naturalWidth,
+                      height: img.naturalHeight
+                    };
+                    setOriginalImageSize(newSize);
+                    // Set displayed size immediately after load
+                    setDisplayedImageSize(newSize);
+                    updateDisplayedImageSize();
+                  }}
+                />
+                {detectedPoint.length > 0 && detectedPoint.map((point, index) => {
+                  const scaledPoint = scaleCoordinates(point);
+                  return (
+                    <div key={index} className="absolute top-0 left-0 w-full h-full pointer-events-none">
+                      <div
+                        className="absolute w-6 h-6 border-2 border-red-500 rounded-full transform -translate-x-1/2 -translate-y-1/2 animate-pulse"
+                        style={{
+                          left: `${scaledPoint.x}px`,
+                          top: `${scaledPoint.y}px`,
+                        }}
+                      >
+                        <div 
+                          className="absolute w-2 h-2 bg-red-500 rounded-full"
+                          style={{
+                            left: '50%',
+                            top: '50%',
+                            transform: 'translate(-50%, -50%)'
+                          }}
+                        />
+                      </div>
+                      <div
+                        className="absolute px-2 py-1 bg-black/75 text-white text-xs rounded"
+                        style={{
+                          left: `${scaledPoint.x + 15}px`,
+                          top: `${scaledPoint.y + 15}px`,
+                        }}
+                      >
+                        {index + 1}: ({point.x.toFixed(1)}, {point.y.toFixed(1)})
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-full text-gray-500">
+                <div className="text-center">
+                  <svg className="w-16 h-16 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <p>No image selected</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Controls Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Upload Section */}
+            <div className="p-6 bg-gray-800 rounded-lg border border-gray-700">
+              <label className="block text-gray-300 text-sm font-medium mb-4">
                 Upload Image
-                <span className="text-gray-500 font-normal ml-2">(Max size: 10MB)</span>
+                <span className="text-gray-500 ml-2">(Max size: 10MB)</span>
               </label>
               <input
                 type="file"
                 accept="image/*"
                 onChange={handleImageUpload}
-                className="w-full p-2 border rounded"
+                className="w-full p-2 bg-gray-700 rounded border border-gray-600 text-gray-300 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-gray-600 file:text-gray-300 hover:file:bg-gray-500"
               />
+              <button
+                onClick={handleDetectGCP}
+                disabled={!selectedImage || loading || !cvReady}
+                className={`w-full mt-4 py-3 px-4 rounded-lg font-medium transition-colors
+                  ${!selectedImage || loading || !cvReady
+                    ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
+                  }`}
+              >
+                {loading ? 'Processing...' : 'Detect GCP'}
+              </button>
             </div>
 
-            {detectedPoint.length > 0 && (
-              <div className="p-4 border rounded-lg bg-gray-50">
-                <h3 className="font-bold mb-2">Detected Coordinates</h3>
-                <div className="max-h-40 overflow-y-auto">
-                  {detectedPoint.map((point, index) => (
-                    <div key={index} className="grid grid-cols-2 gap-2 mb-2">
-                      <div>
-                        <span className="text-gray-600">Point {index + 1} X:</span>
-                        <span className="ml-2 font-mono">{point.x.toFixed(2)}</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Y:</span>
-                        <span className="ml-2 font-mono">{point.y.toFixed(2)}</span>
-                      </div>
-                    </div>
-                  ))}
+            {/* Configuration Section */}
+            <div className="lg:col-span-2 p-6 bg-gray-800 rounded-lg border border-gray-700">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-lg font-medium text-blue-400">Detection Settings</h3>
+                <button
+                  onClick={resetConfig}
+                  className="px-4 py-2 text-sm bg-gray-700 hover:bg-gray-600 rounded-md transition-colors"
+                >
+                  Reset to Defaults
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* White Marker Settings */}
+                <div className="space-y-4">
+                  <div>
+                    <label className="flex items-center text-gray-300 mb-2">
+                      White Marker Brightness
+                      <InfoTooltip content={tooltips.whiteThreshold} />
+                    </label>
+                    <input
+                      type="range"
+                      min="100"
+                      max="200"
+                      value={config.whiteThreshold.min[2]}
+                      onChange={(e) => setConfig(prev => ({
+                        ...prev,
+                        whiteThreshold: {
+                          ...prev.whiteThreshold,
+                          min: [0, 0, parseInt(e.target.value)]
+                        }
+                      }))}
+                      className="w-full accent-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="flex items-center text-gray-300 mb-2">
+                      Background Darkness
+                      <InfoTooltip content={tooltips.blackThreshold} />
+                    </label>
+                    <input
+                      type="range"
+                      min="80"
+                      max="180"
+                      value={config.blackThreshold.max[2]}
+                      onChange={(e) => setConfig(prev => ({
+                        ...prev,
+                        blackThreshold: {
+                          ...prev.blackThreshold,
+                          max: [180, 255, parseInt(e.target.value)]
+                        }
+                      }))}
+                      className="w-full accent-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="flex items-center text-gray-300 mb-2">
+                      Minimum Marker Size
+                      <InfoTooltip content={tooltips.minMarkerArea} />
+                    </label>
+                    <input
+                      type="number"
+                      min="50"
+                      max="500"
+                      value={config.minMarkerArea}
+                      onChange={(e) => setConfig(prev => ({
+                        ...prev,
+                        minMarkerArea: parseInt(e.target.value)
+                      }))}
+                      className="w-full p-2 bg-gray-700 rounded border border-gray-600 text-gray-300"
+                    />
+                  </div>
+                </div>
+
+                {/* Black Detection Settings */}
+                <div className="space-y-4">
+                  <div>
+                    <label className="flex items-center text-gray-300 mb-2">
+                      Maximum Marker Pair Distance
+                      <InfoTooltip content={tooltips.pairDistance} />
+                    </label>
+                    <input
+                      type="number"
+                      min="30"
+                      max="200"
+                      value={config.pairCriteria.maxDistance}
+                      onChange={(e) => setConfig(prev => ({
+                        ...prev,
+                        pairCriteria: {
+                          ...prev.pairCriteria,
+                          maxDistance: parseInt(e.target.value)
+                        }
+                      }))}
+                      className="w-full p-2 bg-gray-700 rounded border border-gray-600 text-gray-300"
+                    />
+                  </div>
+                  <div>
+                    <label className="flex items-center text-gray-300 mb-2">
+                      Verification Strictness
+                      <InfoTooltip content={tooltips.blackPixels} />
+                    </label>
+                    <input
+                      type="range"
+                      min="1"
+                      max="20"
+                      value={config.minBlackPixels}
+                      onChange={(e) => setConfig(prev => ({
+                        ...prev,
+                        minBlackPixels: parseInt(e.target.value)
+                      }))}
+                      className="w-full accent-blue-500"
+                    />
+                  </div>
                 </div>
               </div>
-            )}
-
-            <button
-              onClick={handleDetectGCP}
-              disabled={!selectedImage || loading || !cvReady}
-              className={`w-full py-3 px-4 rounded-lg font-bold
-                ${!selectedImage || loading || !cvReady
-                  ? 'bg-gray-300 cursor-not-allowed'
-                  : 'bg-blue-500 hover:bg-blue-600 text-white'
-                }`}
-            >
-              {loading ? 'Processing...' : 'Detect GCP'}
-            </button>
+            </div>
           </div>
 
-          <div className="relative border rounded-lg overflow-hidden bg-gray-50">
-            {preview ? (
-              <>
-                <img
-                  ref={imageRef}
-                  src={preview}
-                  alt="Preview"
-                  className="max-w-full h-auto object-contain"
-                  style={{ maxHeight: '600px', width: '100%' }}
-                  onLoad={(e) => {
-                    // Update image size on load
-                    const img = e.currentTarget;
-                    setOriginalImageSize({
-                      width: img.naturalWidth,
-                      height: img.naturalHeight
-                    });
-                  }}
-                />
-                {detectedPoint.length > 0 && detectedPoint.map((point, index) => (
-                  <div key={index}>
-                    <div
-                      className="absolute w-6 h-6 border-2 border-red-500 rounded-full transform -translate-x-1/2 -translate-y-1/2 animate-pulse"
-                      style={{
-                        left: `${scaleCoordinates(point).x}px`,
-                        top: `${scaleCoordinates(point).y}px`,
-                        pointerEvents: 'none'
-                      }}
-                    >
-                      <div className="absolute inset-0 m-auto w-2 h-2 bg-red-500 rounded-full" />
-                    </div>
-                    <div
-                      className="absolute px-2 py-1 bg-black/75 text-white text-xs rounded"
-                      style={{
-                        left: `${scaleCoordinates(point).x + 15}px`,
-                        top: `${scaleCoordinates(point).y + 15}px`,
-                        pointerEvents: 'none',
-                      }}
-                    >
-                      {index + 1}: ({point.x.toFixed(1)}, {point.y.toFixed(1)})
+          {/* Results Section */}
+          {detectedPoint.length > 0 && (
+            <div className="p-6 bg-gray-800 rounded-lg border border-gray-700">
+              <h3 className="text-lg font-medium text-blue-400 mb-4">Detected Coordinates</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {detectedPoint.map((point, index) => (
+                  <div key={index} className="p-3 bg-gray-700 rounded-md">
+                    <div className="text-sm text-gray-400">Point {index + 1}</div>
+                    <div className="font-mono text-sm">
+                      X: {point.x.toFixed(1)}
+                      <br />
+                      Y: {point.y.toFixed(1)}
                     </div>
                   </div>
                 ))}
-              </>
-            ) : (
-              <div className="flex items-center justify-center h-64 text-gray-400">
-                No image selected
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
     </main>
